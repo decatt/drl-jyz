@@ -14,8 +14,6 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
 
-from torchviz import make_dot
-
 """
 Environments' objects for training, including
     map_size: observation space size map
@@ -175,8 +173,12 @@ class PPOMicroRTSShareConditionNet(AlgoBase.AlgoBaseNet):
                 nn.ReLU(), 
                 AlgoBase.layer_init(nn.Linear(256, 1), std=1)
             )
+        
+    def get_state_z(self, states):
+        states = states.permute((0, 3, 1, 2))
+        return self.policy_network(states)
                 
-    def get_distris(self, states, prev_actions = None, index_action = None):
+    def get_distris(self, states_z,prev_actions = None, index_action = None):
         """
         Calculate the distributions of states
 
@@ -194,8 +196,7 @@ class PPOMicroRTSShareConditionNet(AlgoBase.AlgoBaseNet):
             >>> train_net.get_distris(state)
         """
         # Moving last convolution channel shape to the second dimention 
-        states = states.permute((0, 3, 1, 2))
-        policy_network = self.policy_network(states)
+        policy_network = states_z
         if prev_actions != None:
             input_state = torch.cat((policy_network, prev_actions), dim=1)
         else:
@@ -239,8 +240,10 @@ class PPOMicroRTSShareConditionNet(AlgoBase.AlgoBaseNet):
 
         return dist
 
-    def forward(self, states):
+    def forward(self):
         """
+        NOT WORK
+
         Calculate state values, probability distributions of each state
 
         Args:
@@ -255,9 +258,7 @@ class PPOMicroRTSShareConditionNet(AlgoBase.AlgoBaseNet):
             >>> state = torch.randn(1,10,10,27) # one state dimention
             >>> distris, value = train_net(state)
         """
-        distris = self.get_distris(states)
-        value = self.get_value(states)
-        return distris, value
+        return None
     
     def get_value(self, states):
         """
@@ -446,7 +447,8 @@ class PPOMicroRTSShareConditionAgent(AlgoBase.AlgoBaseAgent):
         """
         states = torch.Tensor(states)
         distris = []
-        dist = self.sample_net.get_distris(index_action=0, states=states, prev_actions=None)
+        states_z = self.sample_net.get_state_z(states)
+        dist = self.sample_net.get_distris(index_action=0, states_z=states_z, prev_actions=None)
         
         unit_masks = torch.Tensor(unit_masks)
         dist.update_masks(unit_masks)
@@ -459,7 +461,7 @@ class PPOMicroRTSShareConditionAgent(AlgoBase.AlgoBaseAgent):
         action_masks = torch.split(torch.Tensor(action_mask_list), self.action_shape[1:], dim=1)
 
         for i in range(1, 8):
-            dist = self.sample_net.get_distris(index_action=i, states=states, prev_actions=actions)
+            dist = self.sample_net.get_distris(index_action=i, states_z=states_z, prev_actions=actions)
             dist.update_masks(action_masks[i-1])
             action = dist.sample()
             actions = torch.cat((actions, action.unsqueeze(1)), dim=1)
@@ -516,7 +518,8 @@ class PPOMicroRTSShareConditionAgent(AlgoBase.AlgoBaseAgent):
         '''
         states = torch.Tensor(states)
         distris = []
-        dist = self.sample_net.get_distris(index_action=0, states=states, prev_actions=None)
+        states_z = self.sample_net.get_state_z(states)
+        dist = self.sample_net.get_distris(index_action=0, states_z=states_z, prev_actions=None)
         
         unit_masks = torch.Tensor(unit_masks)
         dist.update_masks(unit_masks)
@@ -529,7 +532,7 @@ class PPOMicroRTSShareConditionAgent(AlgoBase.AlgoBaseAgent):
         action_masks = torch.split(torch.Tensor(action_mask_list), self.action_shape[1:], dim=1)
 
         for i in range(1, 8):
-            dist = self.sample_net.get_distris(index_action=i, states=states, prev_actions=actions)
+            dist = self.sample_net.get_distris(index_action=i, states_z=states_z, prev_actions=actions)
             dist.update_masks(action_masks[i-1])
             action = dist.sample()
             actions = torch.cat((actions, action.unsqueeze(1)), dim=1)
@@ -831,13 +834,14 @@ class PPOMicroRTSShareConditionCalculate(AlgoBase.AlgoBaseCalculate):
         #start_time = time.time()
         action_masks = torch.split(masks, train_config['action_shape'], dim=1)
         distris = []
-        dist = self.calculate_net.get_distris(index_action=0, states=states, prev_actions=None)
+        states_z = self.calculate_net.get_state_z(states)
+        dist = self.calculate_net.get_distris(index_action=0, states_z=states_z, prev_actions=None)
         dist.update_masks(action_masks[0], device=self.device)
         distris.append(dist)
         #end_time = time.time()-start_time
         #print('forward_time:',str(end_time))
         for i in range(1, len(action_masks)):
-            dist = self.calculate_net.get_distris(index_action=i, states=states, prev_actions=actions[:i, :].T)
+            dist = self.calculate_net.get_distris(index_action=i, states_z=states_z, prev_actions=actions[:i, :].T)
             dist.update_masks(action_masks[i], device=self.device)
             distris.append(dist)
 
